@@ -13,7 +13,7 @@ func (c *config) getTotalRAM() (int, error) {
 		return out, err
 	}
 
-	matches := c.regexMemTotal.FindStringSubmatch(memInfo)
+	matches := c.regex.memTotal.FindStringSubmatch(memInfo)
 
 	ramInKb, err := strconv.Atoi(matches[1])
 	if err != nil {
@@ -31,7 +31,7 @@ func (c *config) getUsedRAM() (int, error) {
 		return out, err
 	}
 
-	matches := c.regexMemAvailable.FindStringSubmatch(memInfo)
+	matches := c.regex.memAvailable.FindStringSubmatch(memInfo)
 
 	ramInKb, err := strconv.Atoi(matches[1])
 	if err != nil {
