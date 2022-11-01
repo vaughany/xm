@@ -3,22 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"regexp"
 )
-
-func (c *config) getNumCPUs() (int, error) {
-	var out int
-
-	fileContents, err := os.ReadFile("/proc/cpuinfo")
-	if err != nil {
-		return out, err
-	}
-
-	re := regexp.MustCompile(`processor`)
-	matches := re.FindAllStringIndex(string(fileContents), -1)
-
-	return len(matches), nil
-}
 
 func (c *config) getLoadAverages() (float64, float64, float64, error) {
 	var (

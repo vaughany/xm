@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"runtime"
 	_ "runtime/cgo" // Required for cgo / static compilation for Ubuntu 18.04.
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ type config struct {
 		passengerProcesses   *regexp.Regexp
 	}
 	version string
+	startup time.Time
 }
 
 func main() {
@@ -41,7 +43,8 @@ func main() {
 	cfg.regex.memTotal = regexp.MustCompile(`MemTotal: {1,}([0-9]{1,}) kB`)
 	cfg.regex.passengerMaxPoolSize = regexp.MustCompile(`Max pool size {1,}: ([0-9]{1,})`)
 	cfg.regex.passengerProcesses = regexp.MustCompile(`Processes {1,}: ([0-9]{1,})`)
-	cfg.version = "1.0.2"
+	cfg.version = "1.0.3"
+	cfg.startup = time.Now()
 
 	flag.StringVar(&cfg.log.file, "logfile", cfg.log.file, "logfile path and name")
 	flag.Parse()
@@ -53,12 +56,13 @@ func main() {
 	}
 	defer cfg.log.fileHandle.Close()
 
-	cfg.recordIt(fmt.Sprintf("XM v%s startup: %s.\n", cfg.version, time.Now().Format(time.RFC1123)))
-
-	cfg.total.CPUs, err = cfg.getNumCPUs()
+	hostname, err := os.Hostname()
 	if err != nil {
-		fmt.Println(err)
+		log.Fatal(err)
 	}
+	cfg.recordIt(fmt.Sprintf("XM v%s startup on %s: %s.\n", cfg.version, hostname, time.Now().Format(time.RFC1123)))
+
+	cfg.total.CPUs = runtime.NumCPU()
 	cfg.recordIt(fmt.Sprintf("CPUs: %d. Any load above this will be recorded.", cfg.total.CPUs))
 
 	cfg.total.RAM, err = cfg.getTotalRAM()
@@ -71,9 +75,11 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-	cfg.recordIt(fmt.Sprintf("Passenger: %d workers. More than 50%% of these used will be recorded.", cfg.total.passengerPool))
+	cfg.recordIt(fmt.Sprintf("Passenger: %d workers. More than 50%% of these used (or less than 5 used) will be recorded.", cfg.total.passengerPool))
 
 	cfg.recordIt("---")
+
+	go cfg.keepAlive()
 
 	for {
 		logThis := false
@@ -104,7 +110,7 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 		}
-		if passengerProcesses > (cfg.total.passengerPool / 2) {
+		if passengerProcesses > (cfg.total.passengerPool/2) || passengerProcesses < 5 {
 			logThis = true
 			triggers += "WRK "
 		}
@@ -130,5 +136,13 @@ func (c *config) writeToDisk(record string) {
 	_, err := c.log.fileHandle.WriteString(record + "\n")
 	if err != nil {
 		log.Panic(err)
+	}
+}
+
+func (c *config) keepAlive() {
+	for {
+		time.Sleep(time.Hour)
+
+		c.recordIt(fmt.Sprintf("App has been running for %s.", time.Since(c.startup).Round(time.Minute)))
 	}
 }

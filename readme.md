@@ -19,9 +19,10 @@ If any of the 1, 5 or 15-minute load averages exceeds the number of processors, 
 
 If the in-use memory exceeds 50% of the total memory, a record of load average and memory use is logged.
 
-If the number of active Phusion Passenger workers exceeds 50% of the total number of workers, it's logged.
+If the number of active Phusion Passenger workers exceeds 50% of the total number of workers, or less than 5, it's logged.
 
 ## History
 
 * **v0.0.1:** initial release. Logs load average and ram use to `stdout` and a log file.
 * **v0.0.2:** added Phusion Passenger worker watching (uses `passenger-status`, which requires elevated privileges to get details out of). Also, the entry in the log is suffixed with whichever text triggered it: `CPU` for load average, `RAM` for memory, `WRK` for Passenger workers.
+* **v0.0.3:** replaced reading /proc/cpuinfo with runtime.NumCPU(); added hostname to log file; added an hourly 'keep-alive' timestamp to the log file for clarity.
