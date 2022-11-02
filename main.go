@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"regexp"
 	"runtime"
 	_ "runtime/cgo" // Required for cgo / static compilation for Ubuntu 18.04.
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -38,12 +40,20 @@ func main() {
 		err error
 	)
 
-	cfg.log.file = "xm.log"
+	sig := make(chan os.Signal)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sig
+		cfg.cleanup()
+		os.Exit(0)
+	}()
+
+	cfg.log.file = fmt.Sprintf("xm_%s.log", time.Now().Format("2006-01-02"))
 	cfg.regex.memAvailable = regexp.MustCompile(`MemAvailable: {1,}([0-9]{1,}) kB`)
 	cfg.regex.memTotal = regexp.MustCompile(`MemTotal: {1,}([0-9]{1,}) kB`)
 	cfg.regex.passengerMaxPoolSize = regexp.MustCompile(`Max pool size {1,}: ([0-9]{1,})`)
 	cfg.regex.passengerProcesses = regexp.MustCompile(`Processes {1,}: ([0-9]{1,})`)
-	cfg.version = "1.0.3"
+	cfg.version = "1.0.4"
 	cfg.startup = time.Now()
 
 	flag.StringVar(&cfg.log.file, "logfile", cfg.log.file, "logfile path and name")
@@ -69,13 +79,13 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-	cfg.recordIt(fmt.Sprintf("RAM: %d Mb. Less than 50%% of this available will be recorded.", cfg.total.RAM))
+	cfg.recordIt(fmt.Sprintf("RAM: %d Mb. Less than 50%% available will be recorded.", cfg.total.RAM))
 
 	cfg.total.passengerPool, err = cfg.getPassengerMaxPoolSize()
 	if err != nil {
 		fmt.Println(err)
 	}
-	cfg.recordIt(fmt.Sprintf("Passenger: %d workers. More than 50%% of these used (or less than 5 used) will be recorded.", cfg.total.passengerPool))
+	cfg.recordIt(fmt.Sprintf("Passenger: %d workers. Less than 5 used, or 10 or more used, will be recorded.", cfg.total.passengerPool))
 
 	cfg.recordIt("---")
 
@@ -90,7 +100,7 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 		}
-		if la1 > float64(cfg.total.CPUs) || la5 > float64(cfg.total.CPUs) || la15 > float64(cfg.total.CPUs) {
+		if la1 > float64(cfg.total.CPUs) {
 			logThis = true
 			triggers += "CPU "
 		}
@@ -110,7 +120,7 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 		}
-		if passengerProcesses > (cfg.total.passengerPool/2) || passengerProcesses < 5 {
+		if passengerProcesses < 5 || passengerProcesses >= 10 {
 			logThis = true
 			triggers += "WRK "
 		}
@@ -145,4 +155,8 @@ func (c *config) keepAlive() {
 
 		c.recordIt(fmt.Sprintf("App has been running for %s.", time.Since(c.startup).Round(time.Minute)))
 	}
+}
+
+func (c *config) cleanup() {
+	c.recordIt(fmt.Sprintf("%s: app shutdown. Bye!", time.Now().Format(time.RFC1123)))
 }
