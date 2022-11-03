@@ -29,6 +29,7 @@ type config struct {
 		memTotal             *regexp.Regexp
 		passengerMaxPoolSize *regexp.Regexp
 		passengerProcesses   *regexp.Regexp
+		passengerRequests    *regexp.Regexp
 	}
 	version string
 	startup time.Time
@@ -53,11 +54,18 @@ func main() {
 	cfg.regex.memTotal = regexp.MustCompile(`MemTotal: {1,}([0-9]{1,}) kB`)
 	cfg.regex.passengerMaxPoolSize = regexp.MustCompile(`Max pool size {1,}: ([0-9]{1,})`)
 	cfg.regex.passengerProcesses = regexp.MustCompile(`Processes {1,}: ([0-9]{1,})`)
-	cfg.version = "1.0.4"
+	cfg.regex.passengerRequests = regexp.MustCompile(`Requests in queue: ([0-9]{1,})`)
+	cfg.version = "1.0.5"
 	cfg.startup = time.Now()
 
 	flag.StringVar(&cfg.log.file, "logfile", cfg.log.file, "logfile path and name")
+	version := flag.Bool("v", false, "gets version info and exits")
 	flag.Parse()
+
+	if *version {
+		fmt.Printf("XM v%s.\n", cfg.version)
+		os.Exit(0)
+	}
 
 	// Creates a new log file, wiping the existing file if it exists.
 	cfg.log.fileHandle, err = os.Create(cfg.log.file)
@@ -87,6 +95,7 @@ func main() {
 	}
 	cfg.recordIt(fmt.Sprintf("Passenger: %d workers. Less than 5 used, or 10 or more used, will be recorded.", cfg.total.passengerPool))
 
+	cfg.recordIt("Passenger: queued requests. More than 0 will be recorded.")
 	cfg.recordIt("---")
 
 	go cfg.keepAlive()
@@ -115,8 +124,14 @@ func main() {
 			triggers += "RAM "
 		}
 
+		// Get the output from passenger once for both 'processes' and 'requests' checks.
+		passengerOutput, err := cfg.getPassengerOutput()
+		if err != nil {
+			fmt.Println(err)
+		}
+
 		// Passenger processes.
-		passengerProcesses, err := cfg.getPassengerProcesses()
+		passengerProcesses, err := cfg.getPassengerProcesses(passengerOutput)
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -125,10 +140,20 @@ func main() {
 			triggers += "WRK "
 		}
 
+		// Passenger requests in queue.
+		passengerRequests, err := cfg.getPassengerRequests(passengerOutput)
+		if err != nil {
+			fmt.Println(err)
+		}
+		if passengerRequests > 0 {
+			logThis = true
+			triggers += "REQ "
+		}
+
 		// Log it all if required.
 		if logThis {
-			record := fmt.Sprintf("%s: %.2f %.2f %.2f; %d / %d Mb; %d / %d workers [%s]", time.Now().Format(time.RFC1123),
-				la1, la5, la15, availableRAM, cfg.total.RAM, passengerProcesses, cfg.total.passengerPool, strings.Trim(triggers, " "))
+			record := fmt.Sprintf("%s: %.2f %.2f %.2f; %d / %d Mb; %d / %d workers; %d in queue [%s]", time.Now().Format(time.RFC1123),
+				la1, la5, la15, availableRAM, cfg.total.RAM, passengerProcesses, cfg.total.passengerPool, passengerRequests, strings.Trim(triggers, " "))
 
 			cfg.recordIt(record)
 		}
