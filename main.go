@@ -64,7 +64,7 @@ func main() {
 	cfg.regex.passengerMaxPoolSize = regexp.MustCompile(`Max pool size {1,}: ([0-9]{1,})`)
 	cfg.regex.passengerProcesses = regexp.MustCompile(`Processes {1,}: ([0-9]{1,})`)
 	cfg.regex.passengerRequests = regexp.MustCompile(`Requests in queue: ([0-9]{1,})`)
-	cfg.version = "0.0.6"
+	cfg.version = "0.0.7"
 	cfg.startup = time.Now()
 
 	flag.StringVar(&cfg.log.file, "logfile", cfg.log.file, "logfile path and name")
@@ -186,8 +186,15 @@ func main() {
 
 		// Log it all if required.
 		if logThis {
-			record := fmt.Sprintf("%s: %s; %s / %d Mb; %s / %d workers; %s in queue [%s]", time.Now().Format(time.RFC1123),
-				laOutput, ramOutput, cfg.total.RAM, procOutput, cfg.total.passengerPool, reqOutput, strings.Trim(triggers, " "))
+			var record string
+			if cfg.noPassenger {
+				record = fmt.Sprintf("%s: %s; %s / %d Mb [%s]", time.Now().Format(time.RFC1123),
+					laOutput, ramOutput, cfg.total.RAM, strings.Trim(triggers, " "))
+
+			} else {
+				record = fmt.Sprintf("%s: %s; %s / %d Mb; %s / %d workers; %s in queue [%s]", time.Now().Format(time.RFC1123),
+					laOutput, ramOutput, cfg.total.RAM, procOutput, cfg.total.passengerPool, reqOutput, strings.Trim(triggers, " "))
+			}
 
 			cfg.recordIt(record)
 		}

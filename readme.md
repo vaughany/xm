@@ -80,3 +80,4 @@ Passenger: queued requests. More than 0 will be recorded.
 * **v0.0.4:** created per-day logfile name; modified Passenger workers to log 10 or more used; modified CPU use to monitor only the recent minute average, not 5 or 15 minute averages; code to handle Ctrl-C nicely.
 * **v0.0.5:** version flag; passed output from Phusion Passenger to functions that require it, meaning we call `passenger-status` once for multiple Passenger tests; test for queued Passenger requests (tagged `REQ`).
 * **v0.0.6:** added a flag to skip Passenger-related checks, and an in-code check to also set that flag if the binary's not available; added colour to the output to better show which check triggered the log.
+* **v0.0.7:** Now doesn't show Passenger details (all 0's) in the output if `-nopassenger` is set.
