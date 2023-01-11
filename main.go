@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/TwiN/go-color"
 )
 
 type config struct {
@@ -31,8 +34,9 @@ type config struct {
 		passengerProcesses   *regexp.Regexp
 		passengerRequests    *regexp.Regexp
 	}
-	version string
-	startup time.Time
+	noPassenger bool
+	version     string
+	startup     time.Time
 }
 
 func main() {
@@ -49,16 +53,22 @@ func main() {
 		os.Exit(0)
 	}()
 
-	cfg.log.file = fmt.Sprintf("xm_%s.log", time.Now().Format("2006-01-02"))
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	cfg.log.file = fmt.Sprintf("xm_%s_%s.log", time.Now().Format("2006-01-02"), hostname)
 	cfg.regex.memAvailable = regexp.MustCompile(`MemAvailable: {1,}([0-9]{1,}) kB`)
 	cfg.regex.memTotal = regexp.MustCompile(`MemTotal: {1,}([0-9]{1,}) kB`)
 	cfg.regex.passengerMaxPoolSize = regexp.MustCompile(`Max pool size {1,}: ([0-9]{1,})`)
 	cfg.regex.passengerProcesses = regexp.MustCompile(`Processes {1,}: ([0-9]{1,})`)
 	cfg.regex.passengerRequests = regexp.MustCompile(`Requests in queue: ([0-9]{1,})`)
-	cfg.version = "1.0.5"
+	cfg.version = "0.0.6"
 	cfg.startup = time.Now()
 
 	flag.StringVar(&cfg.log.file, "logfile", cfg.log.file, "logfile path and name")
+	flag.BoolVar(&cfg.noPassenger, "nopassenger", cfg.noPassenger, "does not run Phusion Passenger checks")
 	version := flag.Bool("v", false, "gets version info and exits")
 	flag.Parse()
 
@@ -74,10 +84,6 @@ func main() {
 	}
 	defer cfg.log.fileHandle.Close()
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		log.Fatal(err)
-	}
 	cfg.recordIt(fmt.Sprintf("XM v%s startup on %s: %s.\n", cfg.version, hostname, time.Now().Format(time.RFC1123)))
 
 	cfg.total.CPUs = runtime.NumCPU()
@@ -89,29 +95,48 @@ func main() {
 	}
 	cfg.recordIt(fmt.Sprintf("RAM: %d Mb. Less than 50%% available will be recorded.", cfg.total.RAM))
 
-	cfg.total.passengerPool, err = cfg.getPassengerMaxPoolSize()
-	if err != nil {
-		fmt.Println(err)
+	// Checking for Phusion Passenger's presence.
+	_, err = os.Stat("/usr/sbin/passenger-status")
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		cfg.noPassenger = true
 	}
-	cfg.recordIt(fmt.Sprintf("Passenger: %d workers. Less than 5 used, or 10 or more used, will be recorded.", cfg.total.passengerPool))
+	if cfg.noPassenger {
+		cfg.recordIt("Not checking Phusion Passenger as it is not present or the --nopassenger flag was set.")
+	} else {
+		cfg.total.passengerPool, err = cfg.getPassengerMaxPoolSize()
+		if err != nil {
+			fmt.Println(err)
+		}
+		cfg.recordIt(fmt.Sprintf("Passenger: %d workers. Less than 5 used, or 10 or more used, will be recorded.", cfg.total.passengerPool))
+		cfg.recordIt("Passenger: queued requests. More than 0 will be recorded.")
+	}
 
-	cfg.recordIt("Passenger: queued requests. More than 0 will be recorded.")
 	cfg.recordIt("---")
 
 	go cfg.keepAlive()
 
 	for {
-		logThis := false
-		triggers := ""
+		var (
+			logThis            = false
+			triggers           = ""
+			passengerProcesses = 0
+			passengerRequests  = 0
+			laOutput           = ""
+			ramOutput          = ""
+			procOutput         = "0"
+			reqOutput          = "0"
+		)
 
 		// Load average testing.
 		la1, la5, la15, err := cfg.getLoadAverages()
 		if err != nil {
 			fmt.Println(err)
 		}
+		laOutput = fmt.Sprintf("%.2f %.2f %.2f", la1, la5, la15)
 		if la1 > float64(cfg.total.CPUs) {
 			logThis = true
-			triggers += "CPU "
+			laOutput = color.Colorize(color.Red, laOutput)
+			triggers += color.Colorize(color.Red, "CPU") + " "
 		}
 
 		// RAM use testing.
@@ -119,41 +144,50 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 		}
+		ramOutput = fmt.Sprintf("%d", availableRAM)
 		if availableRAM < (cfg.total.RAM / 2) {
 			logThis = true
-			triggers += "RAM "
+			ramOutput = color.Colorize(color.Yellow, ramOutput)
+			triggers += color.Colorize(color.Yellow, "RAM") + " "
 		}
 
-		// Get the output from passenger once for both 'processes' and 'requests' checks.
-		passengerOutput, err := cfg.getPassengerOutput()
-		if err != nil {
-			fmt.Println(err)
-		}
+		// Passenger things, if possible and not turned off.
+		if !cfg.noPassenger {
+			// Get the output from passenger once for both 'processes' and 'requests' checks.
+			passengerOutput, err := cfg.getPassengerOutput()
+			if err != nil {
+				fmt.Println(err)
+			}
 
-		// Passenger processes.
-		passengerProcesses, err := cfg.getPassengerProcesses(passengerOutput)
-		if err != nil {
-			fmt.Println(err)
-		}
-		if passengerProcesses < 5 || passengerProcesses >= 10 {
-			logThis = true
-			triggers += "WRK "
-		}
+			// Passenger processes.
+			passengerProcesses, err = cfg.getPassengerProcesses(passengerOutput)
+			if err != nil {
+				fmt.Println(err)
+			}
+			procOutput = fmt.Sprintf("%d", passengerProcesses)
+			if passengerProcesses < 5 || passengerProcesses >= 10 {
+				logThis = true
+				procOutput = color.Colorize(color.Purple, procOutput)
+				triggers += color.Colorize(color.Purple, "WRK") + " "
+			}
 
-		// Passenger requests in queue.
-		passengerRequests, err := cfg.getPassengerRequests(passengerOutput)
-		if err != nil {
-			fmt.Println(err)
-		}
-		if passengerRequests > 0 {
-			logThis = true
-			triggers += "REQ "
+			// Passenger requests in queue.
+			passengerRequests, err = cfg.getPassengerRequests(passengerOutput)
+			if err != nil {
+				fmt.Println(err)
+			}
+			reqOutput = fmt.Sprintf("%d", passengerRequests)
+			if passengerRequests > 0 {
+				logThis = true
+				reqOutput = color.Colorize(color.Cyan, reqOutput)
+				triggers += color.Colorize(color.Purple, "REQ") + " "
+			}
 		}
 
 		// Log it all if required.
 		if logThis {
-			record := fmt.Sprintf("%s: %.2f %.2f %.2f; %d / %d Mb; %d / %d workers; %d in queue [%s]", time.Now().Format(time.RFC1123),
-				la1, la5, la15, availableRAM, cfg.total.RAM, passengerProcesses, cfg.total.passengerPool, passengerRequests, strings.Trim(triggers, " "))
+			record := fmt.Sprintf("%s: %s; %s / %d Mb; %s / %d workers; %s in queue [%s]", time.Now().Format(time.RFC1123),
+				laOutput, ramOutput, cfg.total.RAM, procOutput, cfg.total.passengerPool, reqOutput, strings.Trim(triggers, " "))
 
 			cfg.recordIt(record)
 		}
